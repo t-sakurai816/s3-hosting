@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: S3 and CloudFront for Static website hosting (OAI Available)
+
+Metadata:
+  "AWS::CloudFormation::Interface":
+    ParameterGroups:
+      - Label:
+          default: "S3 and CloudFront Configuration"
+        Parameters:
+          # - WebsiteDomainName
+          - HostZoneName
+          - SubDomain
+          - CFSSLCertificateId
+
+    ParameterLabels:
+      # WebsiteDomainName:
+      #   default: "hoge.sakudev.net"
+      HostZoneName
+      SubDomain
+      CFSSLCertificateId
+
+# ------------------------------------------------------------#
+# Input Parameters
+# ------------------------------------------------------------#
+Parameters:
+  # WebsiteDomainName:
+  #   Description: "Enter Domain Name"
+  #   Default: "hoge.sakudev.net"
+  #   Type: String
+
+  HostZoneName:
+    Description: "Enter Host Zone Name"
+    Default: "sakudev.net"
+    Type: String
+
+  SubDomain:
+    Description: "The xxx part of xxx.sakudev.net"
+    Default: "hoge"
+    Type: String
+
+  CFSSLCertificateId:
+    Description: "Enter the identifier of the ACM. If not entered, it will be a wildcard certificate."
+    Default: "19bfff6e-ce38-4729-897e-8865eac90f87"
+    Type: String
+
+Resources:
+  # ------------------------------------------------------------#
+  #  S3 Bucket
+  # ------------------------------------------------------------#
+  # Bucket
+  Bucket:
+    Type: "AWS::S3::Bucket"
+    Properties:
+      BucketName: !Sub ${SubDomain}.${HostZoneName}
+
+  CloudFrontOriginAccessIdentity:
+    Type: "AWS::CloudFront::CloudFrontOriginAccessIdentity"
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !Sub "access-identity-${Bucket}"
+
+  BucketPolicy:
+    Type: "AWS::S3::BucketPolicy"
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Statement:
+          - Action: "s3:GetObject"
+            Effect: Allow
+            Resource: !Sub "arn:aws:s3:::${Bucket}/*"
+            Principal:
+              CanonicalUser: !GetAtt CloudFrontOriginAccessIdentity.S3CanonicalUserId
+
+  # ------------------------------------------------------------#
+  #  CloudFront
+  # ------------------------------------------------------------#
+  CloudFrontDistribution:
+    Type: "AWS::CloudFront::Distribution"
+    Properties:
+      DistributionConfig:
+        PriceClass: PriceClass_All
+        Aliases:
+          - !Sub ${SubDomain}.${HostZoneName}
+        Origins:
+          - DomainName: !GetAtt Bucket.RegionalDomainName
+            Id: !Sub "S3origin-${SubDomain}.${HostZoneName}"
+            S3OriginConfig:
+              OriginAccessIdentity: !Sub "origin-access-identity/cloudfront/${CloudFrontOriginAccessIdentity}"
+        DefaultRootObject: index.html
+        DefaultCacheBehavior:
+          TargetOriginId: !Sub "S3origin-${SubDomain}.${HostZoneName}"
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachedMethods:
+            - GET
+            - HEAD
+          DefaultTTL: 3600
+          MaxTTL: 86400
+          MinTTL: 60
+          Compress: true
+          ForwardedValues:
+            Cookies:
+              Forward: none
+            QueryString: false
+        ViewerCertificate:
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.1_2016
+          AcmCertificateArn: !Sub "arn:aws:acm:us-east-1:${AWS::AccountId}:certificate/${CFSSLCertificateId}"
+        HttpVersion: http2
+        Enabled: true
+
+  # ------------------------------------------------------------#
+  #  Route53
+  # ------------------------------------------------------------#
+  DnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub "${HostZoneName}."
+      Comment: "DNS for S3 hosting by CloudFormation"
+      Name: !Sub "${SubDomain}.${HostZoneName}"
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt CloudFrontDistribution.DomainName
+        HostedZoneId: "Z2FDTNDATAQYW2"
+
+# ------------------------------------------------------------#
+# Output Parameters
+# ------------------------------------------------------------#
+Outputs:
+  #DistributionID
+  DistributionID:
+    Description: CloudFront Distribution
+    Value: !Ref CloudFrontDistribution
+
+  #DmainName
+  WebDomainName:
+    Value: !Sub "${SubDomain}.${HostZoneName}"
